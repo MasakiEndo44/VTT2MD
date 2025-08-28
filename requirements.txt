@@ -1,0 +1,4 @@
+webvtt-py
+pyinstaller
+TkinterDnD2
+customtkinter

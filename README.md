@@ -1,4 +1,4 @@
-![VTT2MD Icon](assets/icon.png)
+![VTT2MD Icon|400](assets/icon.png)
 
 # VTT2MD
 

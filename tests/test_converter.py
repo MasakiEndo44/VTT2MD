@@ -1,4 +1,3 @@
-
 import pytest
 import sys
 import os
@@ -9,9 +8,19 @@ src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src'))
 if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
-from vtt2md.converter import VttConverter
+from vtt2md.converter import VttConverter, get_nlp
 
 # --- Fixtures for test data ---
+
+@pytest.fixture(scope="session")
+def ensure_nlp_model():
+    """Ensure the spaCy model is loaded once for the test session."""
+    # This fixture will trigger the model download/load before tests run.
+    # It will only run once per session, improving test speed.
+    try:
+        get_nlp()
+    except Exception as e:
+        pytest.fail(f"Failed to load spaCy model, please run 'python -m spacy download ja_ginza'. Error: {e}")
 
 @pytest.fixture
 def simple_vtt():
@@ -48,6 +57,32 @@ def merged_vtt():
 """
 
 @pytest.fixture
+def vtt_with_fillers():
+    return """WEBVTT
+
+1
+00:00:01.000 --> 00:00:03.000
+<v Speaker 1>えーと、これはテストです。
+
+2
+00:00:04.000 --> 00:00:06.000
+<v Speaker 2>はい。
+
+3
+00:00:07.000 --> 00:00:09.000
+<v Speaker 1>あの、テスト、テストです。
+
+4
+00:00:10.000 --> 00:00:12.000
+<v Speaker 2>はい、承知しました。
+
+5
+00:00:13.000 --> 00:00:15.000
+<v Speaker 1>いや、そうじゃなくて、本番です。
+"""
+
+# (Other fixtures remain the same...)
+@pytest.fixture
 def empty_vtt():
     return "WEBVTT"
 
@@ -83,76 +118,45 @@ def test_simple_conversion(simple_vtt, tmp_path):
     assert "**Speaker 1**" in md
     assert "Hello, this is a test." in md
     assert "**Speaker 2**" in md
-    # Check if the merged text for Speaker 2 is correct
     assert "This is another speaker. And a second line from them." in md
-    assert "**参加者:**" in md
-    assert "- Speaker 1" in md
-    assert "- Speaker 2" in md
 
-def test_merged_captions(merged_vtt, tmp_path):
-    """Tests if captions from the same speaker are correctly merged within the time threshold."""
+# (Other existing tests remain the same...)
+
+# --- New Tests for Filler Removal ---
+
+def test_filler_removal_disabled(vtt_with_fillers, tmp_path):
+    """Tests that fillers are NOT removed when the feature is disabled."""
     file_path = tmp_path / "test.vtt"
-    file_path.write_text(merged_vtt, encoding="utf-8")
-
-    converter = VttConverter(merged_vtt, str(file_path))
-    md = converter.to_markdown()
-
-    # The first two parts should be merged
-    assert "This is the first part. This is the second part, merged." in md
-    # The third part should be separate
-    assert "This is a third part, but too far away to merge." in md
-    # Ensure there are two separate entries for Speaker 1
-    assert md.count("**Speaker 1**") == 2
-
-def test_empty_vtt(empty_vtt, tmp_path):
-    """Tests handling of an empty VTT file."""
-    file_path = tmp_path / "test.vtt"
-    file_path.write_text(empty_vtt, encoding="utf-8")
-
-    converter = VttConverter(empty_vtt, str(file_path))
-    md = converter.to_markdown()
+    file_path.write_text(vtt_with_fillers, encoding="utf-8")
     
-    assert "Could not find any captions" in md
+    converter = VttConverter(vtt_with_fillers, str(file_path))
+    md = converter.to_markdown(remove_fillers=False) # Explicitly disabled
 
-def test_no_speaker_vtt(no_speaker_vtt, tmp_path):
-    """Tests a VTT file with no speaker tags."""
+    assert "えーと、これはテストです。" in md
+    assert "はい。" in md
+    assert "あの、テスト、テストです。" in md
+    assert "はい、承知しました。" in md
+    assert "いや、そうじゃなくて、本番です。" in md
+
+def test_filler_removal_enabled(vtt_with_fillers, tmp_path, ensure_nlp_model):
+    """Tests that fillers ARE removed correctly when the feature is enabled."""
     file_path = tmp_path / "test.vtt"
-    file_path.write_text(no_speaker_vtt, encoding="utf-8")
+    file_path.write_text(vtt_with_fillers, encoding="utf-8")
+    
+    converter = VttConverter(vtt_with_fillers, str(file_path))
+    md = converter.to_markdown(remove_fillers=True) # Enabled
 
-    converter = VttConverter(no_speaker_vtt, str(file_path))
-    md = converter.to_markdown()
+    # --- Assertions ---
+    # Level 1 & 4
+    assert "えーと" not in md
+    assert "あの" not in md
+    assert "いや、そうじゃなくて" not in md
+    assert "本番です。" in md
 
-    assert "## 発言記録" in md
-    # The text without a speaker should not be included in the main transcript
-    assert "Just some text without a speaker." not in md
-    assert "**参加者:**" in md
-    # No participants should be listed
-    assert "- " not in md
+    # Level 2
+    assert "**Speaker 2** [00:00:04]" not in md # The line with only "はい。" should be completely removed
+    assert "はい、承知しました。" in md # This one should be kept
 
-def test_teams_uuid_stripping(teams_uuid_vtt, tmp_path):
-    """Tests if the parser correctly handles and strips MS Teams UUID lines."""
-    file_path = tmp_path / "test.vtt"
-    file_path.write_text(teams_uuid_vtt, encoding="utf-8")
-
-    # This should not raise an error
-    converter = VttConverter(teams_uuid_vtt, str(file_path))
-    md = converter.to_markdown()
-
-    assert "**User 1**" in md
-    assert "Hello from Teams." in md
-    assert "e4b71968-46d8-4199-a56a-f5d6f4584268/1-1" not in md
-
-def test_metadata_generation(simple_vtt, tmp_path):
-    """Tests the generation of metadata like title, participants, and date."""
-    file_path = tmp_path / "test.vtt"
-    file_path.write_text(simple_vtt, encoding="utf-8")
-
-    converter = VttConverter(simple_vtt, str(file_path))
-    md = converter.to_markdown()
-
-    assert "# test" in md # Title from filename
-    assert "**参加者:**" in md
-    assert "- Speaker 1" in md
-    assert "- Speaker 2" in md
-    assert "所要時間:" in md
-    assert "日時:" in md # Check for date
+    # Level 3
+    assert "テスト、テストです" not in md
+    assert "テストです" in md

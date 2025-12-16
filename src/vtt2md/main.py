@@ -1,17 +1,36 @@
+import sys
+import types
+
+# Stub out darkdetect to avoid slow WMI calls during theme detection.
+if "darkdetect" not in sys.modules:
+    _darkdetect_stub = types.ModuleType("darkdetect")
+    _darkdetect_stub.theme = lambda *_, **__: "Light"
+    _darkdetect_stub.listener = lambda *_, **__: None
+    sys.modules["darkdetect"] = _darkdetect_stub
+
 import customtkinter
 from tkinterdnd2 import TkinterDnD, DND_FILES
 from pathlib import Path
 import threading
+import queue
 from tkinter import filedialog, messagebox
-from vtt2md.converter import convert_vtt_to_md
 from datetime import datetime
-from tkcalendar import DateEntry
+from importlib import import_module
+from typing import TYPE_CHECKING
+from vtt2md.converter import convert_vtt_to_md
+
+if TYPE_CHECKING:
+    from tkcalendar import Calendar  # type: ignore
 
 # --- カスタムダイアログ --- #
 class DateTimeDialog(customtkinter.CTkToplevel):
-    """日付と時刻を同時に入力するためのカスタムダイアログ。"""
+    """Dialog that collects the meeting date and start time."""
     def __init__(self, master=None):
         super().__init__(master)
+
+        self.geometry("420x520")
+        self.minsize(420, 520)
+        self.resizable(False, False)
 
         self.title("会議の日時を入力")
         self.lift()
@@ -27,18 +46,58 @@ class DateTimeDialog(customtkinter.CTkToplevel):
         main_frame = customtkinter.CTkFrame(self, fg_color="transparent")
         main_frame.pack(expand=True, fill="both", padx=20, pady=20)
 
-        # Date Entry (tkcalendarを使用)
+        # Calendar widget (tkcalendar) used for date selection
         customtkinter.CTkLabel(main_frame, text="会議の日付", font=("Yu Gothic UI", 13)).pack(anchor="w")
-        self.date_entry = DateEntry(main_frame, date_pattern='y-mm-dd', width=18,
-                                    background='#3B8ED0', foreground='white', borderwidth=2, 
-                                    font=entry_font) # Apply font
-        self.date_entry.pack(pady=(5, 15), fill="x", ipady=4) # Add internal padding
+        Calendar = getattr(import_module("tkcalendar"), "Calendar")
+        self.calendar = Calendar(
+            main_frame,
+            selectmode="day",
+            date_pattern="y-mm-dd",
+            showweeknumbers=False,
+            firstweekday="monday",
+            background="white",
+            foreground="#1A1A1A",
+            headersbackground="#3B8ED0",
+            headersforeground="white",
+            selectbackground="#3B8ED0",
+            selectforeground="white",
+            normalbackground="white",
+            normalforeground="#1A1A1A",
+            weekendbackground="#F0F4FA",
+            weekendforeground="#1A1A1A",
+            bordercolor="#3B8ED0",
+            font=("Yu Gothic UI", 14),
+        )
+        self.calendar.pack(pady=(5, 15), fill="both", expand=True)
+        self.calendar.selection_set(datetime.now().date())
 
         # Time Entry
         customtkinter.CTkLabel(main_frame, text="会議の開始時刻 (HH:MM)", font=("Yu Gothic UI", 13)).pack(anchor="w")
-        self.time_entry = customtkinter.CTkEntry(main_frame, placeholder_text="14:30", width=250, font=entry_font) # Apply font
-        self.time_entry.pack(pady=(5, 20), fill="x", ipady=4) # Add internal padding
-        self.time_entry.insert(0, datetime.now().strftime("%H:%M"))
+        time_frame = customtkinter.CTkFrame(main_frame, fg_color="transparent")
+        time_frame.pack(pady=(5, 20), fill="x")
+        current_time = datetime.now()
+        default_hour = f"{current_time.hour:02d}"
+        default_minute = f"{(current_time.minute // 15) * 15:02d}"
+        hour_options = [f"{h:02d}" for h in range(24)]
+        minute_options = ["00", "15", "30", "45"]
+        self.hour_var = customtkinter.StringVar(value=default_hour)
+        self.minute_var = customtkinter.StringVar(value=default_minute)
+        self.hour_menu = customtkinter.CTkOptionMenu(
+            time_frame,
+            values=hour_options,
+            variable=self.hour_var,
+            width=100,
+            font=entry_font,
+        )
+        self.hour_menu.pack(side="left", padx=(0, 10))
+        self.minute_menu = customtkinter.CTkOptionMenu(
+            time_frame,
+            values=minute_options,
+            variable=self.minute_var,
+            width=100,
+            font=entry_font,
+        )
+        self.minute_menu.pack(side="left")
 
         # Buttons
         button_frame = customtkinter.CTkFrame(self, fg_color="transparent")
@@ -50,7 +109,7 @@ class DateTimeDialog(customtkinter.CTkToplevel):
         self.cancel_button = customtkinter.CTkButton(button_frame, text="キャンセル", command=self._on_cancel, fg_color="gray50", hover_color="gray40", width=100)
         self.cancel_button.pack(side="left", padx=10)
         
-        self.time_entry.focus_set()
+        self.hour_menu.focus_set()
 
         # ウィンドウが表示される前にレイアウトを強制的に更新
         self.update_idletasks()
@@ -58,8 +117,8 @@ class DateTimeDialog(customtkinter.CTkToplevel):
         self.grab_set()
 
     def _on_ok(self, event=None):
-        self._date_str = self.date_entry.get().strip()
-        self._time_str = self.time_entry.get().strip()
+        self._date_str = self.calendar.get_date().strip()
+        self._time_str = f"{self.hour_var.get()}:{self.minute_var.get()}"
         self.grab_release()
         self.destroy()
 
@@ -86,6 +145,8 @@ class App(customtkinter.CTk, TkinterDnD.DnDWrapper):
         self.file_path = None
         self.md_content = []
         self.meeting_datetime = None
+        self._worker_queue: queue.Queue | None = None
+        self._conversion_in_progress = False
         self.remove_fillers_var = customtkinter.BooleanVar(value=True)
         self.split_files_var = customtkinter.StringVar(value="single")
         self.main_frame = customtkinter.CTkFrame(self, corner_radius=0, fg_color="transparent")
@@ -169,35 +230,77 @@ class App(customtkinter.CTk, TkinterDnD.DnDWrapper):
             return None
         return f"{date_str} {time_str}"
 
+
     def process_file(self, filepath):
         self.file_path = Path(filepath)
-        if self.file_path.suffix.lower() != '.vtt':
+        if self.file_path.suffix.lower() != ".vtt":
             messagebox.showerror("エラー", "VTTファイルを選択してください。")
             return
         self.meeting_datetime = self._get_meeting_datetime()
         if not self.meeting_datetime:
             return
-        self.status_label.configure(text="ステータス: 変換中...")
-        threading.Thread(target=self._run_conversion, daemon=True).start()
 
-    def _run_conversion(self):
+        remove_fillers = self.remove_fillers_var.get()
+        split_output = self.split_files_var.get() == "split"
+
+        self._worker_queue = queue.Queue()
+        self._conversion_in_progress = True
+        self.status_label.configure(text="ステータス: 変換中...")
+        threading.Thread(
+            target=self._run_conversion,
+            args=(remove_fillers, split_output),
+            daemon=True,
+        ).start()
+        self.after(50, self._poll_worker_queue)
+
+    def _run_conversion(self, remove_fillers: bool, split_output: bool):
         try:
-            with open(self.file_path, 'r', encoding='utf-8') as f:
+            with open(self.file_path, "r", encoding="utf-8") as f:
                 vtt_content = f.read()
-            self.md_content = convert_vtt_to_md(
+
+            md_content = convert_vtt_to_md(
                 vtt_content,
                 str(self.file_path),
                 meeting_datetime=self.meeting_datetime,
-                remove_fillers=self.remove_fillers_var.get(),
-                split_output=(self.split_files_var.get() == "split")
+                remove_fillers=remove_fillers,
+                split_output=split_output,
             )
-            self.after(0, self.create_result_view)
+            if self._worker_queue:
+                self._worker_queue.put(("success", md_content))
         except FileNotFoundError:
-            self.after(0, lambda: messagebox.showerror("エラー", "ファイルが見つかりません。"))
+            if self._worker_queue:
+                self._worker_queue.put(("error", ("エラー", "ファイルが見つかりません。")))
         except Exception as e:
-            self.after(0, lambda: messagebox.showerror("変換エラー", f"予期せぬエラーが発生しました: {e}"))
+            if self._worker_queue:
+                self._worker_queue.put(("error", ("変換エラー", f"予期せぬエラーが発生しました: {e}")))
         finally:
-            self.after(0, lambda: self.status_label.configure(text="ステータス: 待機中"))
+            if self._worker_queue:
+                self._worker_queue.put(("done", None))
+
+    def _poll_worker_queue(self):
+        if not self._worker_queue:
+            return
+        try:
+            while True:
+                kind, payload = self._worker_queue.get_nowait()
+                if kind == "success":
+                    self.md_content = payload
+                    self.create_result_view()
+                elif kind == "error":
+                    title, message = payload
+                    messagebox.showerror(title, message)
+                elif kind == "done":
+                    self._conversion_in_progress = False
+                self._worker_queue.task_done()
+        except queue.Empty:
+            pass
+
+        if self._conversion_in_progress:
+            self.after(50, self._poll_worker_queue)
+        else:
+            self.status_label.configure(text="ステータス: 待機中")
+            self._worker_queue = None
+
 
     def download_file(self):
         if not self.md_content:

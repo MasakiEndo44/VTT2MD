@@ -35,13 +35,11 @@ jobs:
         # checking if dist/VTT2MD.exe exists
         if (Test-Path dist/VTT2MD.exe) { Write-Host "Build Successful" } else { Write-Error "Build Failed"; exit 1 }
 
-    - name: Build Installer (Inno Setup)
-      uses: Minionguyjosh/setup-inno-setup@v1.4.1
-      with:
-        version: "6.2.2"
-    
+    - name: Install Inno Setup
+      run: choco install innosetup
+
     - name: Compile Installer
-      run: iscc installer.iss
+      run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss'
 
     - name: Create Release
       uses: softprops/action-gh-release@v1

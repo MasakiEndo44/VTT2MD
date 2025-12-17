@@ -30,7 +30,7 @@ jobs:
 
     - name: Build with PyInstaller
       run: |
-        pyinstaller src/vtt2md/main.py --onefile --windowed --name VTT2MD --clean
+        pyinstaller src/vtt2md/main.py --onefile --windowed --name VTT2MD --icon assets/icon.ico --clean
         # If main.spec exists and works, we could use: pyinstaller main.spec
         # checking if dist/VTT2MD.exe exists
         if (Test-Path dist/VTT2MD.exe) { Write-Host "Build Successful" } else { Write-Error "Build Failed"; exit 1 }

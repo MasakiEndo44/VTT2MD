@@ -2,7 +2,7 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "VTT2MD"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.0.1"
 #define MyAppPublisher "Masaki Endo"
 #define MyAppURL "https://github.com/MasakiEndo44/VTT2MD"
 #define MyAppExeName "VTT2MD.exe"

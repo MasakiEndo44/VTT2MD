@@ -54,5 +54,6 @@ Thumbs.db
 
 # Project-specific ignores
 samples/output/
-icon.ico
+/icon.ico
+!assets/icon.ico
 README_for_users.md
